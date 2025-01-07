@@ -13,13 +13,14 @@ entities = pd.read_json(ENTITIES_FILE, lines=True)
 # re-padding zip codes with missing leading zeros
 entities['zip'] = entities['zip'].astype(str)
 entities['zip'] = entities['zip'].str.zfill(5)
+print(entities['zip'].head())
 print(f'{len(entities)}\n')
 entities_valid = entities.dropna(subset=["lat", "lon"])  # Remove entities with missing lat/lon
-entities_valid["dea_no"] = entities_valid["dea_no"].astype(str)
-entities_valid["bus_act"] = entities_valid["bus_act"].astype(str)
-entities_valid["city"] = entities_valid["city"].astype(str)
-entities_valid["state"] = entities_valid["state"].astype(str)
-entities_valid["zip"] = entities_valid["zip"].astype(str)
+entities_valid.loc[:,"dea_no"] = entities_valid["dea_no"].astype(str)
+entities_valid.loc[:,"bus_act"] = entities_valid["bus_act"].astype(str)
+entities_valid.loc[:,"city"] = entities_valid["city"].astype(str)
+entities_valid.loc[:,"state"] = entities_valid["state"].astype(str)
+entities_valid.loc[:,"zip"] = entities_valid["zip"].astype(str)
 
 # Save the cleaned entities to a CSV file
 entities_valid.to_csv(OUTPUT_ENTITIES_FILE, index=False)
@@ -45,14 +46,15 @@ for file in glob.glob(os.path.join(PROCESSED_DIR, "*.jsonl")):
 
         # Flatten consecutive path entries into from-to pairs
         for i in range(len(path) - 1):
+            print(path)
             from_dea = path[i]
             to_dea = path[i + 1]
             date = dates[i] if i < len(dates) else None  # Handle dates safely
 
             # Skip paths where 'from' or 'to' DEA codes are not in the lookup
             if from_dea not in dea_lookup or to_dea not in dea_lookup:
-                print(entities_valid.dtypes)
-                print(type(from_dea), type(to_dea))
+                # print(entities_valid.dtypes)
+                # print(type(from_dea), type(to_dea))
                 print(f'{from_dea=}   from zip: {entities_valid[entities_valid["dea_no"] == from_dea]["zip"]}\n{to_dea=}    to zip: {entities_valid[entities_valid["dea_no"] == to_dea]["zip"]}\n\n')
                 continue
 
