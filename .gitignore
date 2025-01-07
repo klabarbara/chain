@@ -1,2 +1,4 @@
 data/
 preprocessing/DEFUNCT_preprocessing.py
+cleaned_distribution_paths.csv
+cleaned_entities.csv
