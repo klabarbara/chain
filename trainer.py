@@ -4,10 +4,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import json
-import glob
 import csv
 import math
+import pandas as pd
 
 from model import DQN
 from rl_environment import DistributionPathEnv
@@ -24,7 +23,7 @@ with open('data/zip_ll.csv', 'r', encoding='utf-8') as f:
 
 # Step 2: Load DEA info and map DEA codes to lat/lon
 dea_info = {}
-with open('data/entities_updated.csv', 'r', encoding='utf-8') as f:
+with open('data/cleaned_entities.csv', 'r', encoding='utf-8') as f:
     reader = csv.DictReader(f)
     for row in reader:
         dea_code = row['dea_no']
@@ -50,7 +49,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371  # Earth radius in kilometers
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2) * math.sin(dlat/2) + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2) * math.sin(dlon/2)
+    a = math.sin(dlat/2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2) ** 2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
 
@@ -59,24 +58,47 @@ def distance_between_dea(dea_a, dea_b):
     lat2, lon2 = dea_info[dea_b]['lat'], dea_info[dea_b]['lon']
     return haversine_distance(lat1, lon1, lat2, lon2)
 
-# Step 4: Build transitions from processed jsonl files
+# Step 4: Build transitions from cleaned_distribution_paths.csv
 transitions = {}
-for file_path in glob.glob('data/processed_with_ndc/*.jsonl'):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            entry = json.loads(line.strip())
-            path = entry['path']
-            for i in range(len(path)-1):
-                a, b = path[i], path[i+1]
-                dist = distance_between_dea(a, b)
-                if a not in transitions:
-                    transitions[a] = []
-                transitions[a].append((b, dist))
+paths_df = pd.read_csv('data/cleaned_distribution_paths.csv')
+
+# Flatten the paths into transitions
+for _, row in paths_df.iterrows():
+    from_dea = row['from_dea_no']
+    to_dea = row['to_dea_no']
+    drug = row['drug']
+    quantity = row['quantity']
+    # compute distance from lat/lon if needed
+    dist = haversine_distance(row['from_lat'], row['from_lon'], row['to_lat'], row['to_lon'])
+    
+    # Skip paths where DEA nodes have no valid coordinates
+    if from_dea not in dea_info or to_dea not in dea_info:
+        continue
+    if dea_info[from_dea]['lat'] is None or dea_info[to_dea]['lat'] is None:
+        continue
+    
+    # Avoid duplicate or zero-distance transitions
+    if from_dea == to_dea:
+        continue  # Skip identical consecutive nodes
+
+    dist = distance_between_dea(from_dea, to_dea)
+    if dist == 0.0:
+        continue  # Skip transitions with zero distance
+
+    # Add to transitions only if it's unique
+    if from_dea not in transitions:
+        transitions[from_dea] = []
+    if (to_dea, dist) not in transitions[from_dea]:
+        transitions[from_dea].append((to_dea, dist, quantity, drug))
+
+print(f"Number of nodes in transitions: {len(transitions)}")
+for k, v in list(transitions.items())[:5]:  # Print sample transitions
+    print(f"From {k}: {v}")
 
 nodes = list(dea_info.keys())
 node_to_idx = {n: i for i, n in enumerate(nodes)}
 
-
+# Step 5: Set up the RL environment and DQN
 env = DistributionPathEnv(nodes, transitions, node_to_idx)
 num_episodes = 1000
 max_steps_per_episode = 20
@@ -92,20 +114,42 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 dqn = DQN(num_nodes=len(nodes)).to(device)
 optimizer = optim.Adam(dqn.parameters(), lr=lr)
 
-def choose_action(state, epsilon):
-    if random.random() < epsilon:
-        return env.action_space.sample()
+# Step 6: RL Training
+def choose_action(state, epsilon, dqn, env, nodes, transitions, node_to_idx):
+    # Identify valid actions from the current node
+    current_node = nodes[state]  # Convert state (index) to DEA code
+    if current_node in transitions:
+        valid_next_nodes = [node_to_idx[t[0]] for t in transitions[current_node]]
     else:
+        # If no valid transitions, just return random action or handle differently
+        # But we ensured this shouldn’t happen at reset, still let's handle gracefully:
+        return env.action_space.sample()
+
+    if random.random() < epsilon:
+        # Choose a random valid action
+        action = random.choice(valid_next_nodes)
+    else:
+        # Choose the best valid action according to Q-values
         state_t = torch.tensor([state], device=device)
         with torch.no_grad():
-            q_values = dqn(state_t)
-        return torch.argmax(q_values).item()
+            q_values = dqn(state_t)  # shape (1, num_nodes)
+        
+        # Mask invalid actions by setting them to a very large negative number
+        q_values_masked = q_values.clone()
+        
+        # Create a mask for all actions
+        invalid_actions = set(range(len(nodes))) - set(valid_next_nodes)
+        for ia in invalid_actions:
+            q_values_masked[0, ia] = -1e9  # Large negative value
+
+        action = torch.argmax(q_values_masked).item()
+    return action
 
 for episode in range(num_episodes):
     state, _ = env.reset()
     total_reward = 0
     for t in range(max_steps_per_episode):
-        action = choose_action(state, epsilon)
+        action = choose_action(state, epsilon, dqn, env, nodes, transitions, node_to_idx)
         next_state, reward, done, info = env.step(action)
         memory.append((state, action, reward, next_state, done))
         state = next_state
