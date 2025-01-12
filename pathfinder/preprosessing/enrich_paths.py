@@ -3,14 +3,14 @@ import pandas as pd
 import json
 
 # File paths
-JSONL_DIR = "../../data/processed_ndc_small"  # Directory containing multiple JSONL files
+JSONL_DIR = "../../data/processed_with_ndc"  # Directory containing multiple JSONL files
 CSV_LOOKUP = "../../data/entities_with_coords.csv"
 DRUG_LOOKUP = "../../data/products.csv"
 OUTPUT_CSV = "../../data/path_with_identity.csv"
 
 # Step 1: Load DEA Code Lookup Table (entities.csv) and Drug Lookup (products.csv)
 lookup_df = pd.read_csv(CSV_LOOKUP)
-lookup_dict = lookup_df.set_index("dea_no")[["lat", "lon"]].to_dict(orient="index")
+lookup_dict = lookup_df.set_index("dea_no")[["lat", "lon", "bus_act"]].to_dict(orient="index")
 
 drugs_df = pd.read_csv(DRUG_LOOKUP, dtype={"ndc": str})  # Ensure ndc is string
 drugs_df["ndc"] = drugs_df["ndc"].str.strip()
@@ -41,21 +41,23 @@ for jsonl_file in os.listdir(JSONL_DIR):
                     to_dea = path[i + 1]
                     step = i + 1  # Step starts at 1
 
-                    # Fetch lat/lon for from and to nodes
-                    from_coords = lookup_dict.get(from_dea)
-                    to_coords = lookup_dict.get(to_dea)
+                    # Fetch lat/lon and bus_act for from and to nodes
+                    from_info = lookup_dict.get(from_dea)
+                    to_info = lookup_dict.get(to_dea)
 
-                    if from_coords and to_coords:
+                    if from_info and to_info:
                         flattened_rows.append({
                             "path_id": path_id,
                             "ndc": ndc,
                             "step": step,
                             "from_dea_no": from_dea,
                             "to_dea_no": to_dea,
-                            "from_lat": from_coords["lat"],
-                            "from_lon": from_coords["lon"],
-                            "to_lat": to_coords["lat"],
-                            "to_lon": to_coords["lon"],
+                            "from_lat": from_info["lat"],
+                            "from_lon": from_info["lon"],
+                            "from_bus_act": from_info["bus_act"],  # Add from bus_act
+                            "to_lat": to_info["lat"],
+                            "to_lon": to_info["lon"],
+                            "to_bus_act": to_info["bus_act"],      # Add to bus_act
                             "quantity": quantity
                         })
 
